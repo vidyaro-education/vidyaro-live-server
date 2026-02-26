@@ -7,7 +7,8 @@ services:
       - "1935:1935" # RTMP — OBS connects here
     volumes:
       - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
-      - recordings:/recordings
+      # Use bind-mount to match coolify-compose.yml so local dev == production
+      - /opt/vidyaro/recordings:/recordings
     environment:
       - INTERNAL_SECRET=${INTERNAL_SECRET}
       - VIDYARO_APP_URL=${VIDYARO_APP_URL}
@@ -39,15 +40,12 @@ services:
       - VIDYARO_APP_URL=${VIDYARO_APP_URL}
       - INTERNAL_SECRET=${INTERNAL_SECRET}
     volumes:
-      - recordings:/recordings
+      # Same bind-mount as rtmp container — must be identical path
+      - /opt/vidyaro/recordings:/recordings
     networks:
       - coolify
     depends_on:
       - nginx-rtmp
-
-volumes:
-  recordings:
-
 
 networks:
   coolify:
