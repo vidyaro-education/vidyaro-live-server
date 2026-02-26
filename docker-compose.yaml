@@ -18,6 +18,15 @@ services:
     container_name: vidyaro-live
     restart: unless-stopped
 
+    # ── Networks ─────────────────────────────────────────────────────────────
+    # FIX: Must join the "coolify" external network so the Next.js container
+    # hostname resolves from inside this container at nginx startup.
+    # Without this, every redeploy loses the manual "docker network connect"
+    # and nginx fails with "host not found" on the on_publish URL.
+    networks:
+      - default
+      - coolify
+
     # ── Ports ───────────────────────────────────────────────────────────────
     ports:
       # RTMP — raw TCP, cannot be proxied by Traefik/Caddy
@@ -35,6 +44,7 @@ services:
       - VIDYARO_APP_DOMAIN=${VIDYARO_APP_DOMAIN}
       - VIDYARO_APP_URL=${VIDYARO_APP_URL}
       - INTERNAL_SECRET=${INTERNAL_SECRET}
+      - VIDYARO_APP_INTERNAL_HOST=${VIDYARO_APP_INTERNAL_HOST}
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
@@ -45,7 +55,6 @@ services:
       - APPWRITE_API_KEY=${APPWRITE_API_KEY}
       - APPWRITE_DATABASE_ID=${APPWRITE_DATABASE_ID}
       - APPWRITE_STREAM_KEYS_COLLECTION_ID=${APPWRITE_STREAM_KEYS_COLLECTION_ID}
-      - VIDYARO_APP_INTERNAL_HOST=${VIDYARO_APP_INTERNAL_HOST}
 
     # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:
@@ -65,9 +74,6 @@ services:
           size: 10485760 # 10 MB
 
       # RAM-backed tmpfs — MP4 work area during ffmpeg + R2 upload
-      # FIX: was 10 GB — unnecessarily large since MP4 is immediately
-      # uploaded and deleted. 4 GB safely covers a 3-hour class at
-      # 2–3 Mbps OBS bitrate. Reduces RAM reservation on smaller VPS.
       - type: tmpfs
         target: /tmp/recordings
         tmpfs:
@@ -88,7 +94,15 @@ services:
         max-size: "50m"
         max-file: "5"
 
-# Named volume — survives container restarts and Coolify redeploys
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  default: # Compose-managed network for internal service communication
+  coolify:
+    external: true
+      # References the existing network Coolify created
+      # All Coolify containers are on this network
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
 volumes:
   recordings:
     driver: local
