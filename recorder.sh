@@ -20,6 +20,9 @@
 ##############################################################################
 set -euo pipefail
 
+# Redirect all stdout/stderr to a log file since nginx-rtmp executes this detached
+exec >> /var/log/nginx/recorder.log 2>&1
+
 FLV_PATH="$1"
 ROOM_ID="$2"
 
@@ -127,7 +130,8 @@ log "Upload complete → ${PUBLIC_URL}"
 DURATION_SECS=$(ffprobe -v error \
     -show_entries format=duration \
     -of default=noprint_wrappers=1:nokey=1 \
-    "${MP4_PATH}" 2>/dev/null | cut -d. -f1 || echo 0)
+    "${MP4_PATH}" 2>/dev/null | awk -F. '{print $1}')
+DURATION_SECS="${DURATION_SECS:-0}"
 HOURS=$(( DURATION_SECS / 3600 ))
 MINUTES=$(( (DURATION_SECS % 3600) / 60 ))
 if [[ "${HOURS}" -gt 0 ]]; then
@@ -142,7 +146,7 @@ log "Duration: ${DURATION_STR} (${DURATION_SECS}s)"
 # ─────────────────────────────────────────────────────────────────────────────
 log "Looking up lectureId for roomId=${ROOM_ID} ..."
 
-APPWRITE_QUERY='[{"method":"equal","attribute":"roomId","values":["'"${ROOM_ID}"'"]}]'
+APPWRITE_QUERY="equal(\"roomId\", [\"${ROOM_ID}\"])"
 ENCODED_QUERY=$(python3 -c \
   "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" \
   "${APPWRITE_QUERY}")
@@ -153,7 +157,7 @@ STREAM_KEY_RESPONSE=$(curl -sf \
   -H "Content-Type: application/json" \
   -H "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
   -H "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
-  "${APPWRITE_ENDPOINT}/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_STREAM_KEYS_COLLECTION_ID}/documents?queries=${ENCODED_QUERY}" \
+  "${APPWRITE_ENDPOINT}/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_STREAM_KEYS_COLLECTION_ID}/documents?queries%5B%5D=${ENCODED_QUERY}" \
   || echo "")
 
 if [[ -n "${STREAM_KEY_RESPONSE}" ]]; then

@@ -38,7 +38,8 @@ RUN mkdir -p \
     /tmp/keys         \
     /tmp/recordings   \
     /recordings       \
-    /var/log/nginx
+    /var/log/nginx \
+    && chown -R nginx:nginx /var/log/nginx /recordings /tmp/live /tmp/keys /tmp/recordings || true
 
 # ── Ports ─────────────────────────────────────────────────────────────────────
 # 1935 = RTMP ingest (OBS → nginx)
