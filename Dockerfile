@@ -1,7 +1,7 @@
 ##############################################################################
 #  Vidyaro Live Server — Dockerfile
 #
-#  Base image : tiangolo/nginx-rtmp (Alpine — includes nginx + nginx-rtmp-module)
+#  Base image : tiangolo/nginx-rtmp:latest (Debian-based)
 #  Extra tools :
 #    • ffmpeg     — FLV → MP4 transcoding
 #    • python3    — JSON encoding + URL-encode helper in recorder.sh
@@ -12,17 +12,16 @@
 FROM tiangolo/nginx-rtmp:latest
 
 # ── System tools ──────────────────────────────────────────────────────────────
-# FIX: aws-cli is NOT in Alpine's apk repo — it must be installed via pip3.
-# The original "apk add aws-cli" silently fails or installs a broken stub,
-# meaning R2 uploads would never work.
-RUN apk add --no-cache \
+# tiangolo/nginx-rtmp:latest is Debian-based — use apt-get, NOT apk
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ffmpeg \
     curl \
     python3 \
-    py3-pip \
+    python3-pip \
     && pip3 install --no-cache-dir awscli \
-    && rm -rf /var/cache/apk/* /root/.cache
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /root/.cache
 
 # ── Nginx config (template — env vars substituted at container start) ─────────
 COPY nginx.conf.template /etc/nginx/nginx.conf.template
@@ -36,15 +35,13 @@ COPY entrypoint.sh /entrypoint.sh
 RUN  chmod +x /entrypoint.sh
 
 # ── Runtime directories ───────────────────────────────────────────────────────
-# FIX: "|| true" kept because nginx user may already own some dirs in the
-# base image — chown failure should not abort the build
 RUN mkdir -p \
     /tmp/live         \
     /tmp/keys         \
     /tmp/recordings   \
     /recordings       \
     /var/log/nginx    \
-    && chown -R nginx:nginx \
+    && chown -R www-data:www-data \
     /var/log/nginx    \
     /recordings       \
     /tmp/live         \
