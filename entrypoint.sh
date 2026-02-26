@@ -14,7 +14,7 @@ set -euo pipefail
 log() { echo "[entrypoint] $*"; }
 
 log "Rendering nginx.conf from template..."
-envsubst '${STREAM_AUTH_URL} ${VIDYARO_APP_DOMAIN}' \
+envsubst '${STREAM_AUTH_URL} ${VIDYARO_APP_DOMAIN} ${INTERNAL_SECRET}' \
     < /etc/nginx/nginx.conf.template \
     > /etc/nginx/nginx.conf
 
