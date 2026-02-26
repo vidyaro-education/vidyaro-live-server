@@ -48,7 +48,20 @@ services:
     build: ./recorder
     container_name: vidyaro-recorder
     restart: unless-stopped
-    env_file: .env
+    # All env vars come from Coolify UI — no env_file needed (it doesn't exist in the repo)
+    environment:
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+      - R2_BUCKET_NAME=${R2_BUCKET_NAME}
+      - R2_PUBLIC_URL=${R2_PUBLIC_URL}
+      - APPWRITE_ENDPOINT=${APPWRITE_ENDPOINT}
+      - APPWRITE_PROJECT_ID=${APPWRITE_PROJECT_ID}
+      - APPWRITE_API_KEY=${APPWRITE_API_KEY}
+      - APPWRITE_DATABASE_ID=${APPWRITE_DATABASE_ID}
+      - APPWRITE_LECTURES_COL_ID=${APPWRITE_LECTURES_COL_ID}
+      - VIDYARO_APP_URL=${VIDYARO_APP_URL}
+      - INTERNAL_SECRET=${INTERNAL_SECRET}
     volumes:
       - '/opt/vidyaro/recordings:/recordings'
     networks:
