@@ -6,38 +6,31 @@
 #  validates the config, then starts nginx in the foreground.
 #
 #  Variables substituted:
-#    ${STREAM_AUTH_URL}    — e.g. https://vidyaro.com/api/stream-auth
-#    ${VIDYARO_APP_DOMAIN} — e.g. vidyaro.com
-#    ${INTERNAL_SECRET}    — shared secret for HLS key endpoint protection
+#    ${STREAM_AUTH_URL}             — NO LONGER USED in nginx.conf (kept for
+#                                     recorder.sh / webhook use only)
+#    ${VIDYARO_APP_DOMAIN}          — e.g. vidyaro.com
+#    ${VIDYARO_APP_INTERNAL_HOST}   — e.g. ywcggc0ocwwgc8g8wsg4gs84-150317765250:3000
+#    ${INTERNAL_SECRET}             — shared secret for HLS key endpoint
 ##############################################################################
 set -euo pipefail
 
 log() { echo "[entrypoint] $*"; }
 
 # ── Validate required env vars before doing anything ─────────────────────────
-# FIX: Original had no validation — if any of these are missing, envsubst
-# silently writes an empty string into nginx.conf, nginx starts with a broken
-# config, and the failure is very hard to trace.
-: "${STREAM_AUTH_URL:?ERROR: STREAM_AUTH_URL is not set}"
 : "${VIDYARO_APP_DOMAIN:?ERROR: VIDYARO_APP_DOMAIN is not set}"
+: "${VIDYARO_APP_INTERNAL_HOST:?ERROR: VIDYARO_APP_INTERNAL_HOST is not set}"
 : "${INTERNAL_SECRET:?ERROR: INTERNAL_SECRET is not set}"
 
 # ── Save full environment for recorder.sh ─────────────────────────────────────
-# recorder.sh sources /etc/nginx/.env as a fallback for local dev.
-# In production Docker, vars are already injected — this is just the safety net.
 log "Saving environment to /etc/nginx/.env..."
 printenv > /etc/nginx/.env
-# FIX: Lock down permissions — this file contains R2 keys, Appwrite API key,
-# and INTERNAL_SECRET. Should not be world-readable inside the container.
 chmod 600 /etc/nginx/.env
 
 # ── Render nginx.conf from template ──────────────────────────────────────────
 log "Rendering nginx.conf from template..."
-# FIX: Explicit variable whitelist passed to envsubst — without the whitelist,
-# envsubst replaces ALL $VARIABLE patterns in the template including nginx
-# variables like $name, $binary_remote_addr, $request_method, $invalid_referer
-# etc., breaking the entire nginx config silently.
-envsubst '${STREAM_AUTH_URL} ${VIDYARO_APP_DOMAIN} ${INTERNAL_SECRET}' \
+# Explicit whitelist — prevents envsubst from destroying nginx variables like
+# $name, $binary_remote_addr, $request_method, $invalid_referer etc.
+envsubst '${VIDYARO_APP_DOMAIN} ${VIDYARO_APP_INTERNAL_HOST} ${INTERNAL_SECRET}' \
     < /etc/nginx/nginx.conf.template \
     > /etc/nginx/nginx.conf
 

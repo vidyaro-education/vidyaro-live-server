@@ -45,6 +45,7 @@ services:
       - APPWRITE_API_KEY=${APPWRITE_API_KEY}
       - APPWRITE_DATABASE_ID=${APPWRITE_DATABASE_ID}
       - APPWRITE_STREAM_KEYS_COLLECTION_ID=${APPWRITE_STREAM_KEYS_COLLECTION_ID}
+      - VIDYARO_APP_INTERNAL_HOST=${VIDYARO_APP_INTERNAL_HOST}
 
     # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:

@@ -38,8 +38,9 @@ rtmp {
             drop_idle_publisher 10s;
 
             # ── Stream Authentication ──────────────────────────────────
-            on_publish      ${STREAM_AUTH_URL};
-            on_publish_done ${STREAM_AUTH_URL}/done;
+            on_publish      http://${VIDYARO_APP_INTERNAL_HOST}/api/stream-auth;
+on_publish_done http://${VIDYARO_APP_INTERNAL_HOST}/api/stream-auth/done;
+
 
             # ── HLS Output ─────────────────────────────────────────────
             hls on;
