@@ -1,0 +1,59 @@
+services:
+  rtmp:
+    image: 'alfg/nginx-rtmp:latest'
+    container_name: vidyaro-live
+    restart: unless-stopped
+
+    # Run envsubst first to inject INTERNAL_SECRET, then start nginx.
+    # The template is bind-mounted read-only; rendered copy goes to nginx's
+    # expected config path.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        envsubst '${INTERNAL_SECRET}' \
+          < /etc/nginx/nginx.conf.template \
+          > /etc/nginx/nginx.conf \
+        && nginx -c /etc/nginx/nginx.conf -g 'daemon off;'
+
+    ports:
+      - '1935:1935'    # RTMP — OBS streams directly (no Traefik proxy)
+
+    expose:
+      - '8080'         # HLS HTTP — routed via Traefik to students
+
+    volumes:
+      # nginx.conf.template on the host contains ${INTERNAL_SECRET} placeholder.
+      # entrypoint above renders it → /etc/nginx/nginx.conf at container start.
+      - '/root/nginx.conf.template:/etc/nginx/nginx.conf.template:ro'
+      - '/opt/vidyaro/recordings:/recordings'
+
+    environment:
+      - INTERNAL_SECRET=${INTERNAL_SECRET}
+
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.vidyaro-live.rule=Host(`live.vidyaro.com`)
+      - traefik.http.routers.vidyaro-live.entrypoints=https
+      - traefik.http.routers.vidyaro-live.tls=true
+      - traefik.http.routers.vidyaro-live.tls.certresolver=letsencrypt
+      - traefik.http.services.vidyaro-live.loadbalancer.server.port=8080
+      - traefik.docker.network=coolify
+
+    networks:
+      - coolify
+
+  recorder:
+    build: ./recorder
+    container_name: vidyaro-recorder
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - '/opt/vidyaro/recordings:/recordings'
+    networks:
+      - coolify
+    depends_on:
+      - rtmp
+
+networks:
+  coolify:
+    external: true

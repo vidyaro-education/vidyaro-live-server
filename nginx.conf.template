@@ -1,0 +1,109 @@
+worker_processes auto;
+worker_rlimit_nofile 65535;
+
+events {
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
+}
+
+rtmp {
+    server {
+        listen 1935;
+        chunk_size 4096;
+        max_message 1M;
+        timeout 30s;
+
+        application stream {
+            live on;
+            drop_idle_publisher 10s;
+
+            # ── Stream Authentication ──────────────────────────────────
+            on_publish https://vidyaro.com/api/stream-auth;
+
+            # ── HLS Output ──────────────────────────────────────
+            hls on;
+            hls_path /tmp/live;
+            hls_fragment 2s;
+            hls_playlist_length 30s;
+
+            # ── AES-128 Encryption (new key every 10 segments) ──
+            hls_keys on;
+            hls_key_path /recordings/keys;
+            hls_key_url https://vidyaro.com/api/hls-key/;
+            hls_fragments_per_key 10;
+
+            # ── Recording ────────────────────────────────────────
+            record all;
+            record_path /recordings;
+            record_suffix _%Y%m%d_%H%M%S.flv;
+            exec_record_done /bin/sh -c "touch $path.done";
+        }
+    }
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    keepalive_timeout 65;
+
+    # ── Rate Limiting: 30r/s per IP, burst 100 ───────────────────
+    limit_req_zone $binary_remote_addr zone=hls:10m rate=30r/s;
+
+    # ── Internal Secret Validation ───────────────────────────────
+    # Used by Next.js to fetch raw key files from /hls-key/
+    map $http_x_internal_secret $secret_valid {
+        default                  0;
+        "${INTERNAL_SECRET}"     1;
+    }
+
+    server {
+        listen 8080;
+
+        # CORS — only vidyaro.com
+        add_header Access-Control-Allow-Origin  "https://vidyaro.com" always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS"         always;
+        add_header Access-Control-Allow-Headers "Authorization, Range" always;
+
+        if ($request_method = OPTIONS) {
+            return 204;
+        }
+
+        # ── HLS Segments ─────────────────────────────────────────
+        location /hls/ {
+            # Block scrapers (yt-dlp, ffmpeg, etc.)
+            limit_req zone=hls burst=100 nodelay;
+
+            # Referer lock — only embed from vidyaro.com
+            valid_referers none blocked vidyaro.com *.vidyaro.com;
+            if ($invalid_referer) {
+                return 403 "Forbidden";
+            }
+
+            types {
+                application/vnd.apple.mpegurl m3u8;
+                video/mp2t                    ts;
+            }
+
+            root /tmp;
+            add_header Cache-Control no-cache;
+            add_header X-Content-Type-Options nosniff;
+        }
+
+        # ── HLS Keys (Internal Only) ──────────────────────────────────
+        # Next.js calls: GET /hls-key/{keyname}
+        # with header:   X-Internal-Secret: <secret>
+        location /hls-key/ {
+            if ($secret_valid = 0) {
+                return 403;
+            }
+            alias /recordings/keys/;
+        }
+
+        # ── RTMP Stats (optional) ─────────────────────────────────
+        location /stat {
+            rtmp_stat all;
+        }
+    }
+}

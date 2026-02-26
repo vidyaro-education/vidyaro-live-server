@@ -1,0 +1,40 @@
+services:
+  nginx-rtmp:
+    image: alfg/nginx-rtmp:latest
+    container_name: vidyaro-live
+    restart: unless-stopped
+    ports:
+      - "1935:1935"   # RTMP — OBS connects here
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - recordings:/recordings
+    environment:
+      - INTERNAL_SECRET=${INTERNAL_SECRET}
+    networks:
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vidyaro-live.rule=Host(`live.vidyaro.com`)"
+      - "traefik.http.routers.vidyaro-live.entrypoints=https"
+      - "traefik.http.routers.vidyaro-live.tls=true"
+      - "traefik.http.routers.vidyaro-live.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vidyaro-live.loadbalancer.server.port=8080"
+
+  recorder:
+    build: ./recorder
+    container_name: vidyaro-recorder
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - recordings:/recordings
+    networks:
+      - coolify
+    depends_on:
+      - nginx-rtmp
+
+volumes:
+  recordings:
+
+networks:
+  coolify:
+    external: true
