@@ -2,13 +2,10 @@
 # Vidyaro Live Server — nginx.conf.template
 #
 # Variables substituted by entrypoint.sh via envsubst:
-#   ${STREAM_AUTH_URL}    — Full URL of Next.js stream-auth endpoint
-#   ${VIDYARO_APP_DOMAIN} — e.g. vidyaro.com  (no protocol)
-#   ${INTERNAL_SECRET}    — Secret for accessing HLS keys internally
+#   ${VIDYARO_APP_DOMAIN}        — e.g. vidyaro.com  (no protocol)
+#   ${VIDYARO_APP_INTERNAL_HOST} — e.g. 10.0.1.11:3000 (internal Docker IP)
+#   ${INTERNAL_SECRET}           — Secret for accessing HLS keys internally
 ########################################################################
-
-# FIX: Removed "user root;" — tiangolo/nginx-rtmp runs as nginx user;
-# root causes config validation failure and is a security risk
 
 worker_processes auto;
 worker_rlimit_nofile 65535;
@@ -38,9 +35,10 @@ rtmp {
             drop_idle_publisher 10s;
 
             # ── Stream Authentication ──────────────────────────────────
+            # FIX: nginx-rtmp does not support https:// in on_publish —
+            # must use internal Docker network IP over plain HTTP
             on_publish      http://${VIDYARO_APP_INTERNAL_HOST}/api/stream-auth;
-on_publish_done http://${VIDYARO_APP_INTERNAL_HOST}/api/stream-auth/done;
-
+            on_publish_done http://${VIDYARO_APP_INTERNAL_HOST}/api/stream-auth/done;
 
             # ── HLS Output ─────────────────────────────────────────────
             hls on;
@@ -86,9 +84,12 @@ http {
     keepalive_timeout 65;
     server_tokens off;
 
+    # FIX: INTERNAL_SECRET is 64 chars — default bucket size of 64 is too
+    # small for the map hash. 128 safely covers the full key + hash overhead.
+    map_hash_bucket_size 128;
+
     gzip on;
-    # FIX: Removed application/vnd.apple.mpegurl from gzip_types —
-    # iOS/Safari HLS players fail to parse gzip-compressed .m3u8 playlists
+    # NOTE: m3u8 excluded — iOS/Safari HLS parser fails on gzip-compressed playlists
     gzip_types application/json text/plain;
 
     access_log /var/log/nginx/access.log;
@@ -123,10 +124,9 @@ http {
         location /live/ {
             root /tmp;
 
-            # FIX: Removed "none" — it allows all requests with no Referer
-            # header (direct curl/VLC access). "server_names" allows
-            # same-origin nginx rewrites; "blocked" covers proxied requests
-            # with missing/mangled Referer headers from legitimate clients.
+            # FIX: Removed "none" — allows direct access with no Referer header
+            # server_names allows same-origin nginx rewrites
+            # blocked covers proxied requests with missing Referer headers
             valid_referers blocked server_names ${VIDYARO_APP_DOMAIN} *.${VIDYARO_APP_DOMAIN};
             if ($invalid_referer) {
                 return 403 "Forbidden";
@@ -139,10 +139,9 @@ http {
                 video/mp2t                    ts;
             }
 
-            # FIX: CORS headers exist ONLY in nested locations below.
-            # Having them in the parent /live/ block AND the nested locations
-            # causes nginx to send duplicate Access-Control-Allow-Origin headers
-            # which browsers reject with a CORS error.
+            # FIX: CORS headers only in nested locations — having them in
+            # the parent AND nested locations causes duplicate headers
+            # which browsers hard-reject
 
             location ~* \.m3u8$ {
                 expires -1;
