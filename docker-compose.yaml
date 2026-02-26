@@ -24,6 +24,10 @@ services:
       # Open port 1935 in your VPS firewall / Coolify server settings
       - "1935:1935"
 
+    expose:
+      # Tell Traefik proxy to route HTTP internal traffic to 8080
+      - "8080"
+
     # ── Environment variables ──────────────────────────────────────────────
     # All set in Coolify UI or .env — NOT here (this file is in git)
     environment:
