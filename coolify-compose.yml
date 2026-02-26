@@ -22,9 +22,9 @@ services:
       - '8080'         # HLS HTTP — routed via Traefik to students
 
     volumes:
-      # nginx.conf.template on the host contains ${INTERNAL_SECRET} placeholder.
-      # entrypoint above renders it → /etc/nginx/nginx.conf at container start.
-      - '/root/nginx.conf.template:/etc/nginx/nginx.conf.template:ro'
+      # nginx.conf.template is in the repo root — Coolify clones the repo,
+      # so we use a repo-relative path (NOT /root/ which is a host path).
+      - './nginx.conf.template:/etc/nginx/nginx.conf.template:ro'
       - '/opt/vidyaro/recordings:/recordings'
 
     environment:
