@@ -1,6 +1,11 @@
-# Generated files — DO NOT commit
+# Secrets
 .env
-nginx.conf
 
-# Editor
+# Runtime artefacts
+recordings/
+*.flv
+*.mp4
+
+# Temp / OS
+/tmp/
 .DS_Store

@@ -1,52 +1,97 @@
+##############################################################################
+#  Vidyaro Live Server — docker-compose.yaml
+#
+#  Deployment targets:
+#    • Coolify  (point it at this repo, Docker Compose type)
+#    • Any VPS  (docker compose up -d --build)
+#
+#  Required env vars — set in Coolify UI or a .env file:
+#    See .env.example for the full list.
+##############################################################################
+version: "3.9"
+
 services:
   nginx-rtmp:
-    image: alfg/nginx-rtmp:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: vidyaro-live
     restart: unless-stopped
-    ports:
-      - "1935:1935" # RTMP — OBS connects here
-    volumes:
-      - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
-      # Use bind-mount to match coolify-compose.yml so local dev == production
-      - /opt/vidyaro/recordings:/recordings
-    environment:
-      - INTERNAL_SECRET=${INTERNAL_SECRET}
-      - VIDYARO_APP_URL=${VIDYARO_APP_URL}
-    networks:
-      - coolify
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.vidyaro-live.rule=Host(`live.vidyaro.com`)"
-      - "traefik.http.routers.vidyaro-live.entrypoints=https"
-      - "traefik.http.routers.vidyaro-live.tls=true"
-      - "traefik.http.routers.vidyaro-live.tls.certresolver=letsencrypt"
-      - "traefik.http.services.vidyaro-live.loadbalancer.server.port=8080"
 
-  recorder:
-    build: ./recorder
-    container_name: vidyaro-recorder
-    restart: unless-stopped
+    # ── Ports ───────────────────────────────────────────────────────────────
+    ports:
+      # RTMP — must be raw TCP (Traefik/Caddy cannot proxy RTMP)
+      # Open port 1935 in your VPS firewall / Coolify server settings
+      - "1935:1935"
+
+      # HLS HTTP — Traefik/Caddy proxies this to https://live.vidyaro.com
+      # Set port = 8080 in Coolify → Service → Port mapping
+      - "8080:8080"
+
+    # ── Environment variables ──────────────────────────────────────────────
+    # All set in Coolify UI or .env — NOT here (this file is in git)
     environment:
+      # Nginx template substitution
+      - STREAM_AUTH_URL=${STREAM_AUTH_URL}
+      - VIDYARO_APP_DOMAIN=${VIDYARO_APP_DOMAIN}
+
+      # Recorder script — Next.js webhook
+      - VIDYARO_APP_URL=${VIDYARO_APP_URL}
+      - INTERNAL_SECRET=${INTERNAL_SECRET}
+
+      # Cloudflare R2
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
-      - R2_BUCKET_NAME=${R2_BUCKET_NAME}
+      - R2_BUCKET=${R2_BUCKET}
       - R2_PUBLIC_URL=${R2_PUBLIC_URL}
+
+      # Appwrite (recorder.sh needs these to look up lectureId)
       - APPWRITE_ENDPOINT=${APPWRITE_ENDPOINT}
       - APPWRITE_PROJECT_ID=${APPWRITE_PROJECT_ID}
       - APPWRITE_API_KEY=${APPWRITE_API_KEY}
       - APPWRITE_DATABASE_ID=${APPWRITE_DATABASE_ID}
-      - APPWRITE_LECTURES_COL_ID=${APPWRITE_LECTURES_COL_ID}
-      - VIDYARO_APP_URL=${VIDYARO_APP_URL}
-      - INTERNAL_SECRET=${INTERNAL_SECRET}
-    volumes:
-      # Same bind-mount as rtmp container — must be identical path
-      - /opt/vidyaro/recordings:/recordings
-    networks:
-      - coolify
-    depends_on:
-      - nginx-rtmp
+      - APPWRITE_STREAM_KEYS_COLLECTION_ID=${APPWRITE_STREAM_KEYS_COLLECTION_ID}
 
-networks:
-  coolify:
-    external: true
+    # ── Volumes ─────────────────────────────────────────────────────────────
+    volumes:
+      # Named volume — persists raw FLV recordings across redeploys
+      - recordings:/recordings
+
+      # RAM-backed tmpfs — HLS segments (fast, auto-cleaned on container stop)
+      - type: tmpfs
+        target: /tmp/live
+        tmpfs:
+          size: 2147483648   # 2 GB
+
+      # RAM-backed tmpfs — AES-128 encryption keys
+      - type: tmpfs
+        target: /tmp/keys
+        tmpfs:
+          size: 10485760     # 10 MB
+
+      # RAM-backed tmpfs — MP4 work area (large enough for longest class)
+      - type: tmpfs
+        target: /tmp/recordings
+        tmpfs:
+          size: 10737418240  # 10 GB
+
+    # ── Health check ────────────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout:  5s
+      retries:  3
+      start_period: 20s
+
+    # ── Logging ─────────────────────────────────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+# Named volume — survives container restarts / Coolify redeploys
+volumes:
+  recordings:
+    driver: local
