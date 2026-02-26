@@ -9,7 +9,7 @@
 #    • curl       — webhook calls + healthcheck
 #    • bash       — scripts require bash, not sh
 ##############################################################################
-FROM tiangolo/nginx-rtmp:latest-alpine
+FROM tiangolo/nginx-rtmp:latest
 
 # ── System tools ──────────────────────────────────────────────────────────────
 # FIX: aws-cli is NOT in Alpine's apk repo — it must be installed via pip3.
