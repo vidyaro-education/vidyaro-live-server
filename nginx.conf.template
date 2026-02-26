@@ -1,3 +1,22 @@
+########################################################################
+# nginx.conf.template — Vidyaro Live Server
+#
+# Coolify's entrypoint renders this via:
+#   envsubst '${INTERNAL_SECRET} ${VIDYARO_APP_URL}' \
+#     < nginx.conf.template > nginx.conf
+#
+# Variables used:
+#   ${INTERNAL_SECRET}   — shared secret between nginx & Next.js for HLS key auth
+#   ${VIDYARO_APP_URL}   — e.g. https://vidyaro.com  (no trailing slash)
+#
+# Anti-piracy features:
+#   1. Rate limiting (30 req/s/IP) — blocks yt-dlp/ffmpeg scrapers
+#   2. CORS domain lock — prevents embedding on other domains
+#   3. HLS AES-128 encryption — downloaded .ts files are unplayable
+#   4. /hls-key/ internal endpoint — only Next.js can fetch keys
+#        (protected by X-Internal-Secret header = ${INTERNAL_SECRET})
+########################################################################
+
 worker_processes auto;
 worker_rlimit_nofile 65535;
 
@@ -7,6 +26,9 @@ events {
     multi_accept on;
 }
 
+########################################################################
+# RTMP — Ingest from OBS / teaching software
+########################################################################
 rtmp {
     server {
         listen 1935;
@@ -19,88 +41,136 @@ rtmp {
             drop_idle_publisher 10s;
 
             # ── Stream Authentication ──────────────────────────────────
-            on_publish https://vidyaro.com/api/stream-auth;
+            on_publish ${VIDYARO_APP_URL}/api/stream-auth;
 
-            # ── HLS Output ──────────────────────────────────────
+            # ── HLS Output ─────────────────────────────────────────────
             hls on;
-            hls_path /tmp/live;
+            hls_path /tmp/live;          # HTTP location /live { root /tmp; }
             hls_fragment 2s;
-            hls_playlist_length 30s;
+            hls_playlist_length 20s;
+            hls_nested on;               # /tmp/live/{roomId}/index.m3u8
+            hls_continuous on;
+            hls_cleanup on;
+            hls_type live;
 
-            # ── AES-128 Encryption (new key every 10 segments) ──
+            # ── AES-128 HLS Encryption (anti-piracy) ──────────────────
+            # Every 10 fragments = new key. Keys served by Next.js with auth.
+            # Downloaded .ts segments are unplayable without the key.
             hls_keys on;
             hls_key_path /recordings/keys;
             hls_key_url ${VIDYARO_APP_URL}/api/hls-key/;
             hls_fragments_per_key 10;
 
-            # ── Recording ────────────────────────────────────────
+            # ── Recording ──────────────────────────────────────────────
             record all;
             record_path /recordings;
             record_suffix _%Y%m%d_%H%M%S.flv;
-            exec_record_done /bin/sh -c "touch $path.done";
+            record_unique on;
+            record_max_size 4096M;
+
+            exec_record_done sh -c 'touch "/recordings/$name.done" || true';
         }
     }
 }
 
+########################################################################
+# HTTP — HLS delivery for students
+########################################################################
 http {
-    include       mime.types;
+    include       /etc/nginx/mime.types;
     default_type  application/octet-stream;
-    sendfile      on;
-    keepalive_timeout 65;
 
-    # ── Rate Limiting: 30r/s per IP, burst 100 ───────────────────
+    sendfile    on;
+    tcp_nopush  on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    server_tokens off;
+
+    gzip on;
+    gzip_types application/vnd.apple.mpegurl application/json text/plain;
+
+    # ── Anti-piracy: Rate limiting ─────────────────────────────────────
+    # 30 req/s per IP, burst 100 — honest student: ~0.5 r/s, scraper: 100+ r/s
     limit_req_zone $binary_remote_addr zone=hls:10m rate=30r/s;
 
-    # ── Internal Secret Validation ───────────────────────────────
-    # Used by Next.js to fetch raw key files from /hls-key/
-    map $http_x_internal_secret $secret_valid {
-        default                  0;
-        "${INTERNAL_SECRET}"     1;
+    # ── HLS key endpoint protection ────────────────────────────────────
+    # Requests must carry X-Internal-Secret matching INTERNAL_SECRET.
+    # envsubst fills in ${INTERNAL_SECRET} from the environment variable.
+    map $http_x_internal_secret $hls_key_allowed {
+        "${INTERNAL_SECRET}"  1;
+        default               0;
     }
 
     server {
         listen 8080;
+        server_name _;
 
-        # CORS — allow all domains to fetch the encrypted chunks (security is handed by JWT via the AES key)
-        add_header Access-Control-Allow-Origin "*" always;
-        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS" always;
-        add_header Access-Control-Allow-Headers "*" always;
+        # ── HLS segments ───────────────────────────────────────────────
+        # RTMP writes to /tmp/live/{roomId}/ so serve from root /tmp
+        location /live {
+            root /tmp;
 
-        if ($request_method = OPTIONS) {
-            return 204;
-        }
+            # CORS domain lock (anti-piracy)
+            valid_referers blocked vidyaro.com *.vidyaro.com;
+            if ($invalid_referer) {
+                return 403 "Forbidden";
+            }
 
-        # ── HLS Segments ─────────────────────────────────────────
-        location /hls/ {
-            # Block scrapers (yt-dlp, ffmpeg, etc.)
+            # Apply rate limit
             limit_req zone=hls burst=100 nodelay;
-
-            # Removed rigid valid_referers check as it can block valid browsers with strict privacy tools.
-            # Security is guaranteed instead by AES-128 key authentication from the Next.js API.
 
             types {
                 application/vnd.apple.mpegurl m3u8;
                 video/mp2t                    ts;
             }
 
-            root /tmp;
-            add_header Cache-Control no-cache;
-            add_header X-Content-Type-Options nosniff;
+            # m3u8 playlists — never cache (always fresh)
+            location ~* \.m3u8$ {
+                expires -1;
+                add_header Cache-Control "no-cache, no-store, must-revalidate";
+                add_header Access-Control-Allow-Origin "${VIDYARO_APP_URL}" always;
+            }
+
+            # ts segments — short cache (immutable once written)
+            location ~* \.ts$ {
+                expires 5s;
+                add_header Cache-Control "public, max-age=5";
+                add_header Access-Control-Allow-Origin "${VIDYARO_APP_URL}" always;
+            }
+
+            add_header Access-Control-Allow-Origin "${VIDYARO_APP_URL}" always;
+            add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
         }
 
-        # ── HLS Keys (Internal Only) ──────────────────────────────────
-        # Next.js calls: GET /hls-key/{keyname}
-        # with header:   X-Internal-Secret: <secret>
+        # ── HLS key proxy (internal — only Next.js may access) ─────────
+        # Keys stored at /recordings/keys/{name}.key
+        # Next.js sends X-Internal-Secret matching INTERNAL_SECRET
         location /hls-key/ {
-            if ($secret_valid = 0) {
-                return 403;
+            if ($hls_key_allowed = 0) {
+                return 403 "Forbidden";
             }
             alias /recordings/keys/;
+            access_log off;
+            add_header Cache-Control "no-cache, no-store, must-revalidate";
+            add_header Content-Type "application/octet-stream";
         }
 
-        # ── RTMP Stats (optional) ─────────────────────────────────
+        # ── Health check ──────────────────────────────────────────────
+        location /health {
+            access_log off;
+            return 200 '{"status":"ok"}';
+            add_header Content-Type application/json;
+        }
+
+        # ── RTMP stats (internal debugging only) ──────────────────────
         location /stat {
             rtmp_stat all;
+            allow 127.0.0.1;
+            deny  all;
+        }
+
+        location / {
+            return 404;
         }
     }
 }
