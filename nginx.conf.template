@@ -30,7 +30,7 @@ rtmp {
             # ── AES-128 Encryption (new key every 10 segments) ──
             hls_keys on;
             hls_key_path /recordings/keys;
-            hls_key_url https://vidyaro.com/api/hls-key/;
+            hls_key_url ${VIDYARO_APP_URL}/api/hls-key/;
             hls_fragments_per_key 10;
 
             # ── Recording ────────────────────────────────────────
@@ -61,10 +61,10 @@ http {
     server {
         listen 8080;
 
-        # CORS — only vidyaro.com
-        add_header Access-Control-Allow-Origin  "https://vidyaro.com" always;
-        add_header Access-Control-Allow-Methods "GET, OPTIONS"         always;
-        add_header Access-Control-Allow-Headers "Authorization, Range" always;
+        # CORS — allow all domains to fetch the encrypted chunks (security is handed by JWT via the AES key)
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "*" always;
 
         if ($request_method = OPTIONS) {
             return 204;
@@ -75,11 +75,8 @@ http {
             # Block scrapers (yt-dlp, ffmpeg, etc.)
             limit_req zone=hls burst=100 nodelay;
 
-            # Referer lock — only embed from vidyaro.com
-            valid_referers none blocked vidyaro.com *.vidyaro.com;
-            if ($invalid_referer) {
-                return 403 "Forbidden";
-            }
+            # Removed rigid valid_referers check as it can block valid browsers with strict privacy tools.
+            # Security is guaranteed instead by AES-128 key authentication from the Next.js API.
 
             types {
                 application/vnd.apple.mpegurl m3u8;

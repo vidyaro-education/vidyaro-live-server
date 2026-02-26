@@ -10,6 +10,7 @@ services:
       - recordings:/recordings
     environment:
       - INTERNAL_SECRET=${INTERNAL_SECRET}
+      - VIDYARO_APP_URL=${VIDYARO_APP_URL}
     networks:
       - coolify
     labels:
