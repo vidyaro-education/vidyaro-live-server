@@ -4,13 +4,13 @@ services:
     container_name: vidyaro-live
     restart: unless-stopped
 
-    # Run envsubst first to inject INTERNAL_SECRET, then start nginx.
+    # Run envsubst first to inject ALL template vars, then start nginx.
     # The template is bind-mounted read-only; rendered copy goes to nginx's
     # expected config path.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        envsubst '${INTERNAL_SECRET}' \
+        envsubst '${INTERNAL_SECRET} ${VIDYARO_APP_URL}' \
           < /etc/nginx/nginx.conf.template \
           > /etc/nginx/nginx.conf \
         && nginx -c /etc/nginx/nginx.conf -g 'daemon off;'
@@ -29,6 +29,8 @@ services:
 
     environment:
       - INTERNAL_SECRET=${INTERNAL_SECRET}
+      # VIDYARO_APP_URL is needed by nginx.conf.template for hls_key_url
+      - VIDYARO_APP_URL=${VIDYARO_APP_URL}
 
     labels:
       - traefik.enable=true
