@@ -9,7 +9,7 @@
 #    • curl       — webhook calls
 #    • bash       — scripts require bash, not sh
 ##############################################################################
-FROM tiangolo/nginx-rtmp:latest-alpine
+FROM alfg/nginx-rtmp:latest
 
 # ── System tools ──────────────────────────────────────────────────────────────
 RUN apk add --no-cache \
