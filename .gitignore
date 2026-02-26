@@ -1,11 +1,20 @@
 # Secrets
 .env
 
-# Runtime artefacts
+# Runtime artefacts — never commit recorded media
 recordings/
 *.flv
 *.mp4
+*.log
+
+# ffmpeg temp logs from recorder.sh
+ffmpeg.log
+
+# Rendered nginx config (generated at container start from template)
+# Committing this would expose substituted INTERNAL_SECRET in git history
+/etc/nginx/nginx.conf
 
 # Temp / OS
 /tmp/
 .DS_Store
+Thumbs.db

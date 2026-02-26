@@ -7,7 +7,9 @@
 #   ${INTERNAL_SECRET}    — Secret for accessing HLS keys internally
 ########################################################################
 
-user root;
+# FIX: Removed "user root;" — tiangolo/nginx-rtmp runs as nginx user;
+# root causes config validation failure and is a security risk
+
 worker_processes auto;
 worker_rlimit_nofile 65535;
 
@@ -30,7 +32,7 @@ rtmp {
         max_message 1M;
         timeout 30s;
         publish_time_fix off;
-        
+
         application stream {
             live on;
             drop_idle_publisher 10s;
@@ -41,7 +43,7 @@ rtmp {
 
             # ── HLS Output ─────────────────────────────────────────────
             hls on;
-            hls_path /tmp/live;          # HLS chunks mapped here
+            hls_path /tmp/live;
             hls_fragment 4s;
             hls_playlist_length 20s;
             hls_nested on;               # Creates /tmp/live/{roomId}/index.m3u8
@@ -84,7 +86,9 @@ http {
     server_tokens off;
 
     gzip on;
-    gzip_types application/vnd.apple.mpegurl application/json text/plain;
+    # FIX: Removed application/vnd.apple.mpegurl from gzip_types —
+    # iOS/Safari HLS players fail to parse gzip-compressed .m3u8 playlists
+    gzip_types application/json text/plain;
 
     access_log /var/log/nginx/access.log;
 
@@ -115,17 +119,21 @@ http {
             add_header Content-Type application/json;
         }
 
-        # ── HLS Segments ───────────────────────────────────────────────
-        # Maintain backwards compatibility for external API callers expecting /hls
+        # ── HLS backwards-compat rewrite ──────────────────────────────
         location /hls/ {
             rewrite ^/hls/(.*)$ /live/$1 last;
         }
 
-        # Map to root /tmp because RTMP writes to /tmp/live
+        # ── HLS Segments ──────────────────────────────────────────────
+        # root /tmp because nginx-rtmp writes HLS to /tmp/live/
         location /live/ {
             root /tmp;
 
-            valid_referers none blocked ${VIDYARO_APP_DOMAIN} *.${VIDYARO_APP_DOMAIN};
+            # FIX: Removed "none" — it allows all requests with no Referer
+            # header (direct curl/VLC access). "server_names" allows
+            # same-origin nginx rewrites; "blocked" covers proxied requests
+            # with missing/mangled Referer headers from legitimate clients.
+            valid_referers blocked server_names ${VIDYARO_APP_DOMAIN} *.${VIDYARO_APP_DOMAIN};
             if ($invalid_referer) {
                 return 403 "Forbidden";
             }
@@ -136,6 +144,11 @@ http {
                 application/vnd.apple.mpegurl m3u8;
                 video/mp2t                    ts;
             }
+
+            # FIX: CORS headers exist ONLY in nested locations below.
+            # Having them in the parent /live/ block AND the nested locations
+            # causes nginx to send duplicate Access-Control-Allow-Origin headers
+            # which browsers reject with a CORS error.
 
             location ~* \.m3u8$ {
                 expires -1;
@@ -157,14 +170,6 @@ http {
                 if ($request_method = 'OPTIONS') {
                     return 204;
                 }
-            }
-
-            add_header Access-Control-Allow-Origin "https://${VIDYARO_APP_DOMAIN}" always;
-            add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
-            add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization" always;
-
-            if ($request_method = 'OPTIONS') {
-                return 204;
             }
         }
 

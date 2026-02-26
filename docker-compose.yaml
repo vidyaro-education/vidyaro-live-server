@@ -20,33 +20,26 @@ services:
 
     # ── Ports ───────────────────────────────────────────────────────────────
     ports:
-      # RTMP — must be raw TCP (Traefik/Caddy cannot proxy RTMP)
-      # Open port 1935 in your VPS firewall / Coolify server settings
+      # RTMP — raw TCP, cannot be proxied by Traefik/Caddy
+      # Must be opened in your VPS firewall AND Coolify server settings
       - "1935:1935"
 
     expose:
-      # Tell Traefik proxy to route HTTP internal traffic to 8080
+      # Traefik/Caddy picks this up and routes HTTPS → HTTP 8080
       - "8080"
 
     # ── Environment variables ──────────────────────────────────────────────
-    # All set in Coolify UI or .env — NOT here (this file is in git)
+    # All set in Coolify UI or .env — NOT hardcoded here (this file is in git)
     environment:
-      # Nginx template substitution
       - STREAM_AUTH_URL=${STREAM_AUTH_URL}
       - VIDYARO_APP_DOMAIN=${VIDYARO_APP_DOMAIN}
-
-      # Recorder script — Next.js webhook
       - VIDYARO_APP_URL=${VIDYARO_APP_URL}
       - INTERNAL_SECRET=${INTERNAL_SECRET}
-
-      # Cloudflare R2
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
       - R2_BUCKET=${R2_BUCKET}
       - R2_PUBLIC_URL=${R2_PUBLIC_URL}
-
-      # Appwrite (recorder.sh needs these to look up lectureId)
       - APPWRITE_ENDPOINT=${APPWRITE_ENDPOINT}
       - APPWRITE_PROJECT_ID=${APPWRITE_PROJECT_ID}
       - APPWRITE_API_KEY=${APPWRITE_API_KEY}
@@ -58,7 +51,7 @@ services:
       # Named volume — persists raw FLV recordings across redeploys
       - recordings:/recordings
 
-      # RAM-backed tmpfs — HLS segments (fast, auto-cleaned on container stop)
+      # RAM-backed tmpfs — HLS segments (fast I/O, auto-cleaned on stop)
       - type: tmpfs
         target: /tmp/live
         tmpfs:
@@ -70,11 +63,14 @@ services:
         tmpfs:
           size: 10485760 # 10 MB
 
-      # RAM-backed tmpfs — MP4 work area (large enough for longest class)
+      # RAM-backed tmpfs — MP4 work area during ffmpeg + R2 upload
+      # FIX: was 10 GB — unnecessarily large since MP4 is immediately
+      # uploaded and deleted. 4 GB safely covers a 3-hour class at
+      # 2–3 Mbps OBS bitrate. Reduces RAM reservation on smaller VPS.
       - type: tmpfs
         target: /tmp/recordings
         tmpfs:
-          size: 10737418240 # 10 GB
+          size: 4294967296 # 4 GB
 
     # ── Health check ────────────────────────────────────────────────────────
     healthcheck:
@@ -91,7 +87,7 @@ services:
         max-size: "50m"
         max-file: "5"
 
-# Named volume — survives container restarts / Coolify redeploys
+# Named volume — survives container restarts and Coolify redeploys
 volumes:
   recordings:
     driver: local

@@ -10,23 +10,22 @@
 #
 #  Pipeline:
 #    1.  Validate FLV exists and is large enough to be meaningful
-#    2.  ffmpeg: FLV → MP4 (stream-copy video, AAC audio, faststart moov atom)
+#    2.  ffmpeg: FLV → MP4 (stream-copy, faststart moov atom)
 #    3.  aws s3 cp: upload MP4 to Cloudflare R2 via S3-compatible API
 #    4.  Calculate duration via ffprobe
 #    5.  Lookup lectureId in Appwrite stream_keys collection (by roomId)
 #    6.  POST /api/internal/recording-ready to Next.js app
-#        → Appwrite lecture.videoUrl updated, lecture marked as recorded
 #    7.  Cleanup temp files
 ##############################################################################
 set -euo pipefail
 
-# Redirect all stdout/stderr to a log file since nginx-rtmp executes this detached
+# Redirect all stdout/stderr to log file (nginx-rtmp runs this detached)
 exec >> /var/log/nginx/recorder.log 2>&1
 
 FLV_PATH="$1"
 ROOM_ID="$2"
 
-# ── Load env (Docker injects vars; .env fallback for local dev) ───────────────
+# ── Load env (.env fallback for local dev; Docker injects vars directly) ──────
 if [[ -f /etc/nginx/.env ]]; then
   # shellcheck disable=SC1091
   source /etc/nginx/.env
@@ -49,6 +48,9 @@ fi
 LOG_PREFIX="[recorder] [${ROOM_ID}]"
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${LOG_PREFIX} $*"; }
 
+# ── Trap: log unexpected exits so orphaned FLVs are easy to find ──────────────
+trap 'log "WARN: Script exited unexpectedly. FLV may remain at ${FLV_PATH}"' ERR
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Step 0: Wait for FLV flush + sanity check
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,7 +62,8 @@ if [[ ! -f "${FLV_PATH}" ]]; then
   exit 1
 fi
 
-FLV_SIZE=$(stat -c%s "${FLV_PATH}" 2>/dev/null || echo 0)
+# FIX: stat -c '%s' with a space — BusyBox/Alpine compatible
+FLV_SIZE=$(stat -c '%s' "${FLV_PATH}" 2>/dev/null || echo 0)
 log "FLV size: ${FLV_SIZE} bytes"
 
 if [[ "${FLV_SIZE}" -lt 1024 ]]; then
@@ -87,10 +90,12 @@ mkdir -p "${WORK_DIR}"
 log "Converting FLV → MP4..."
 FFMPEG_LOG="${WORK_DIR}/ffmpeg.log"
 
+# FIX: -c:a copy instead of -c:a aac — avoids unnecessary re-encode
+# OBS default output is already AAC; copying preserves quality and is ~10x faster
 if ! ffmpeg -y \
     -i  "${FLV_PATH}" \
-    -c:v copy     \
-    -c:a aac      \
+    -c:v copy \
+    -c:a copy \
     -movflags +faststart \
     "${MP4_PATH}" \
     2>"${FFMPEG_LOG}"; then
@@ -99,7 +104,8 @@ if ! ffmpeg -y \
   exit 1
 fi
 
-MP4_SIZE=$(stat -c%s "${MP4_PATH}" 2>/dev/null || echo 0)
+# FIX: stat -c '%s' with a space — BusyBox/Alpine compatible
+MP4_SIZE=$(stat -c '%s' "${MP4_PATH}" 2>/dev/null || echo 0)
 log "MP4 ready: ${MP4_PATH} (${MP4_SIZE} bytes)"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,7 +121,7 @@ if ! aws s3 cp \
     "${MP4_PATH}" \
     "s3://${R2_BUCKET}/${R2_KEY}" \
     --endpoint-url "${R2_ENDPOINT}" \
-    --content-type  "video/mp4" \
+    --content-type "video/mp4" \
     --no-progress; then
   log "ERROR: R2 upload failed"
   exit 1
@@ -127,11 +133,15 @@ log "Upload complete → ${PUBLIC_URL}"
 # ─────────────────────────────────────────────────────────────────────────────
 #  Step 3: Duration
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX: printf "%d" floors float to int safely — handles sub-second edge cases
+# where awk -F. '{print $1}' would return empty string and break arithmetic
 DURATION_SECS=$(ffprobe -v error \
     -show_entries format=duration \
     -of default=noprint_wrappers=1:nokey=1 \
-    "${MP4_PATH}" 2>/dev/null | awk -F. '{print $1}')
+    "${MP4_PATH}" 2>/dev/null \
+    | awk '{printf "%d", $1}')
 DURATION_SECS="${DURATION_SECS:-0}"
+
 HOURS=$(( DURATION_SECS / 3600 ))
 MINUTES=$(( (DURATION_SECS % 3600) / 60 ))
 if [[ "${HOURS}" -gt 0 ]]; then
@@ -146,10 +156,14 @@ log "Duration: ${DURATION_STR} (${DURATION_SECS}s)"
 # ─────────────────────────────────────────────────────────────────────────────
 log "Looking up lectureId for roomId=${ROOM_ID} ..."
 
-APPWRITE_QUERY="equal(\"roomId\", [\"${ROOM_ID}\"])"
+# FIX: Appwrite REST API requires queries[] value to be a JSON-encoded string,
+# not plain URL-encoded text. Without json.dumps(), Appwrite returns all docs
+# unfiltered instead of matching by roomId.
 ENCODED_QUERY=$(python3 -c \
-  "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" \
-  "${APPWRITE_QUERY}")
+  "import urllib.parse, json, sys
+q = json.dumps('equal(\"roomId\", [\"' + sys.argv[1] + '\"])')
+print(urllib.parse.quote(q))" \
+  "${ROOM_ID}")
 
 LECTURE_ID=""
 STREAM_KEY_RESPONSE=$(curl -sf \
@@ -157,7 +171,7 @@ STREAM_KEY_RESPONSE=$(curl -sf \
   -H "Content-Type: application/json" \
   -H "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
   -H "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
-  "${APPWRITE_ENDPOINT}/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_STREAM_KEYS_COLLECTION_ID}/documents?queries%5B%5D=${ENCODED_QUERY}" \
+  "${APPWRITE_ENDPOINT}/databases/${APPWRITE_DATABASE_ID}/collections/${APPWRITE_STREAM_KEYS_COLLECTION_ID}/documents?queries[]=${ENCODED_QUERY}" \
   || echo "")
 
 if [[ -n "${STREAM_KEY_RESPONSE}" ]]; then
@@ -220,11 +234,12 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Step 6: Delete local FLV + temp files (R2 is the source of truth now)
+#  Step 6: Cleanup (R2 is source of truth now)
 # ─────────────────────────────────────────────────────────────────────────────
 log "Cleaning up..."
 rm -f "${MP4_PATH}" "${FFMPEG_LOG}" /tmp/rr_response.json
 rm -f "${FLV_PATH}"
-rmdir "${WORK_DIR}" 2>/dev/null || true
+# FIX: rm -rf instead of rmdir — rmdir silently fails if any leftover files exist
+rm -rf "${WORK_DIR}"
 
 log "✓ Done. Recording available at: ${PUBLIC_URL}"
